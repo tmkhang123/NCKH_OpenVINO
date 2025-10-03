@@ -9,6 +9,8 @@ import time
 
 # Import custom modules
 from style_transfer_module import AdvancedImageProcessor
+from edge_guided_generation import get_edge_guided_generator
+from opencv_restoration import OpenCVRestoration
 
 # Model configuration
 MODEL_PATH = "models/sd15_int8_ov"
@@ -18,26 +20,16 @@ DEVICE = "CPU"
 # Global variables
 current_model = None
 image_processor = AdvancedImageProcessor(DEVICE)
+opencv_restoration = OpenCVRestoration()
 
-# Vietnamese presets
-VIETNAMESE_PRESETS = {
-    "None": "",
-    "Vietnamese Landscape": "beautiful Vietnamese landscape, majestic mountains, high quality, detailed, photorealistic",
-    "Ha Long Bay": "Ha Long Bay, limestone karsts, sailing boats, clear blue water, dramatic lighting, cinematic",
-    "Hoi An Ancient Town": "Hoi An ancient town, colorful lanterns, traditional architecture, warm lighting, atmospheric",
-    "Traditional Ao Dai": "Vietnamese woman wearing traditional ao dai, elegant, portrait photography, soft lighting",
-    "Vietnamese Pagoda": "Vietnamese ancient pagoda, traditional architecture, curved tile roof, peaceful, spiritual atmosphere",
-    "Sapa Rice Terraces": "Sapa terraced rice fields, green color, morning mist, golden hour, landscape photography"
-}
-
-# Restoration presets
-RESTORATION_PROMPTS = {
-    "None": "",
-    "Old Photo": "old photograph, vintage photo, historical image, restored, enhanced quality",
-    "Blurry Image": "blurry image, out of focus photo, sharpened, clear details, enhanced",
-    "Low Quality": "low quality image, pixelated photo, upscaled, high resolution, enhanced",
-    "Noisy Image": "noisy image, grainy photo, denoised, clean, smooth",
-    "Faded Colors": "faded colors, washed out photo, color corrected, vibrant, enhanced"
+# OpenCV Restoration Types (Pure CV - No AI/API!)
+RESTORATION_TYPES = {
+    "None": "Không áp dụng",
+    "Old Photo Restoration": "Ảnh cũ (denoise + contrast + color)",
+    "Blurry Image": "Làm rõ ảnh mờ (sharpening)",
+    "Low Quality": "Nâng cao chất lượng tổng thể",
+    "Noisy Image": "Giảm nhiễu hạt",
+    "Faded Colors": "Làm tươi màu đã có (NOT colorization!)"
 }
 
 def load_model() -> ov_genai.Image2ImagePipeline:
@@ -112,7 +104,7 @@ def create_comparison(original: Image.Image, generated: Image.Image) -> Image.Im
     
     return comparison
 
-def generate_image(mode, inp_img, prompt, preset, style_enh, restoration_type, 
+def generate_image(mode, inp_img, prompt, style_enh, restoration_type,
                   neg_prompt, steps, strength, guidance, width, height, seed, randomize):
     """Main generation function"""
     
@@ -120,85 +112,86 @@ def generate_image(mode, inp_img, prompt, preset, style_enh, restoration_type,
         return None, None, "Please upload an image", None
     
     try:
-        pipe = load_model()
-        
         if randomize:
             seed = random.randint(0, 2**31 - 1)
-        
-        # Mode-specific processing
+
+        # Build prompt
         if mode == "Image Restoration":
-            # Use restoration prompt
             resto_prompt = RESTORATION_PROMPTS.get(restoration_type, "")
             enhanced_prompt = f"{prompt}, {resto_prompt}" if prompt and resto_prompt else (resto_prompt or prompt or "restored, enhanced")
-        else:  # Image Generation
-            if preset != "None":
-                prompt = VIETNAMESE_PRESETS.get(preset, prompt)
+        else:
             enhanced_prompt = enhance_prompt(prompt, style_enh)
-        
-        img = preprocess_image(inp_img, (int(width), int(height)))
-        tensor = image_to_tensor(img)
-        
+
         start_time = time.time()
-        out = pipe.generate(
-            enhanced_prompt,
-            tensor,
-            negative_prompt=neg_prompt or "blurry, low quality, distorted, ugly",
-            num_inference_steps=int(steps),
-            strength=float(strength),
-            guidance_scale=float(guidance),
-            seed=int(seed)
-        )
-        
-        gen_time = time.time() - start_time
-        result_img = Image.fromarray(out.data[0])
-        status = f"Completed in {gen_time:.2f}s | Mode: {mode}"
+
+        # DIFFERENT APPROACH FOR EACH MODE
+        if mode == "Image Restoration":
+            # Pure OpenCV Restoration - KHÔNG DÙNG SD!
+            print(f"🔧 OpenCV Restoration: {restoration_type}")
+
+            result_img, resto_status = opencv_restoration.restore(
+                image=inp_img,
+                restoration_type=restoration_type,
+                strength=float(strength)
+            )
+
+            status = f"✅ {time.time()-start_time:.2f}s | {resto_status}"
+
+        else:
+            # Image Generation: Use edge guidance (for better structure)
+            generator = get_edge_guided_generator()
+
+            result_img, _edges, _status = generator.generate(
+                input_image=inp_img,
+                prompt=enhanced_prompt,
+                negative_prompt=neg_prompt or "blurry, low quality, distorted, ugly",
+                edge_strength=float(strength),
+                num_steps=int(steps),
+                guidance_scale=float(guidance),
+                seed=int(seed) if seed else None
+            )
+            status = f"✅ {time.time()-start_time:.2f}s | Generation | Edge-Guided"
+
         comparison = create_comparison(inp_img, result_img)
-        
-        return result_img, int(seed), status, comparison
-        
+        return result_img, int(seed) if seed else 42, status, comparison
+
     except Exception as e:
-        return None, seed, f"Error: {str(e)}", None
+        return None, seed if seed else 42, f"❌ Error: {str(e)}", None
 
 def restyle_image(inp_img, style_type, prompt):
-    """Restyle function for Tab 2"""
+    """Restyle function - OpenCV style transfer (FAST!)"""
     if inp_img is None:
         return None, "Please upload an image"
-    
+
     try:
         if style_type == "None":
             return inp_img, "No style selected"
-        
+
+        # Use OpenCV style transfer (INSTANT - like before!)
         result_img = image_processor.process_image(
             inp_img,
             style=style_type,
             restoration=None,
             enhancement=None
         )
-        return result_img, f"Style applied: {style_type}"
+
+        return result_img, f"✅ Style applied: {style_type}"
+
     except Exception as e:
-        return None, f"Error: {str(e)}"
+        return None, f"❌ Error: {str(e)}"
 
 def update_ui(mode):
-    """Update UI based on mode"""
+    """Update UI based on mode - Keep parameters unchanged!"""
     if mode == "Image Generation":
         return (
             gr.update(visible=True),   # gen_group
             gr.update(visible=False),  # resto_group
-            gr.update(value=30),       # steps
-            gr.update(value=0.8),      # strength
-            gr.update(value=7.5),      # guidance
         )
     else:  # Image Restoration
         return (
             gr.update(visible=False),
             gr.update(visible=True),
-            gr.update(value=20),
-            gr.update(value=0.4),
-            gr.update(value=5.0),
         )
-
-def apply_preset(preset):
-    return VIETNAMESE_PRESETS.get(preset, "")
 
 # Custom CSS
 custom_css = """
@@ -244,11 +237,6 @@ with gr.Blocks(title="OpenVINO Image-to-Image", theme=gr.themes.Soft(), css=cust
                     
                     # Generation-specific controls
                     with gr.Group(visible=True) as gen_group:
-                        preset = gr.Dropdown(
-                            choices=list(VIETNAMESE_PRESETS.keys()),
-                            value="None",
-                            label="Vietnamese Presets"
-                        )
                         style_enh = gr.Dropdown(
                             choices=["None", "Photorealistic", "Artistic", "Cinematic", "Anime", "Oil Painting", "Watercolor"],
                             value="None",
@@ -257,13 +245,14 @@ with gr.Blocks(title="OpenVINO Image-to-Image", theme=gr.themes.Soft(), css=cust
                     
                     # Restoration-specific controls
                     with gr.Group(visible=False) as resto_group:
-                        gr.Markdown("**Restoration Type**")
+                        gr.Markdown("**🔧 Restoration Type**")
                         restoration_type = gr.Dropdown(
-                            choices=list(RESTORATION_PROMPTS.keys()),
+                            choices=list(RESTORATION_TYPES.keys()),
                             value="None",
-                            label="Select Restoration Type"
+                            label="Select Restoration Type",
+                            info="OpenCV image processing - Fast & reliable"
                         )
-                        gr.Markdown("*Note: Prompt above will be combined with restoration settings*")
+                        gr.Markdown("*💡 OpenCV processing: Fast, reliable, CPU-optimized*")
                     
                     neg_prompt = gr.Textbox(
                         label="Negative Prompt",
@@ -274,18 +263,18 @@ with gr.Blocks(title="OpenVINO Image-to-Image", theme=gr.themes.Soft(), css=cust
                     gr.Markdown("### Parameters")
                     
                     with gr.Row():
-                        steps = gr.Slider(5, 50, value=30, step=1, label="Steps")
-                        strength = gr.Slider(0.1, 1.0, value=0.8, step=0.05, label="Strength")
-                    
-                    guidance = gr.Slider(1.0, 20.0, value=7.5, step=0.5, label="Guidance")
-                    
+                        steps = gr.Slider(5, 50, value=20, step=1, label="Steps")
+                        strength = gr.Slider(0.1, 1.0, value=0.5, step=0.05, label="Strength")
+
+                    guidance = gr.Slider(1.0, 20.0, value=12.0, step=0.5, label="Guidance")
+
                     with gr.Row():
                         width = gr.Slider(256, 1024, value=512, step=64, label="Width")
                         height = gr.Slider(256, 1024, value=512, step=64, label="Height")
-                    
+
                     with gr.Row():
                         seed = gr.Number(value=42, label="Seed", precision=0)
-                        randomize = gr.Checkbox(value=False, label="Random Seed")
+                        randomize = gr.Checkbox(value=True, label="Random Seed")
                     
                     btn = gr.Button("Generate", variant="primary", size="lg")
                 
@@ -329,19 +318,17 @@ with gr.Blocks(title="OpenVINO Image-to-Image", theme=gr.themes.Soft(), css=cust
                     gr.Markdown("### Styled Result")
                     restyle_out = gr.Image(type="pil", label="Output")
                     restyle_status = gr.Markdown("Upload an image and select a style")
-    
+
     # Event Handlers
     mode.change(
         fn=update_ui,
         inputs=[mode],
-        outputs=[gen_group, resto_group, steps, strength, guidance]
+        outputs=[gen_group, resto_group]
     )
-    
-    preset.change(fn=apply_preset, inputs=[preset], outputs=[prompt])
-    
+
     btn.click(
         fn=generate_image,
-        inputs=[mode, inp, prompt, preset, style_enh, restoration_type,
+        inputs=[mode, inp, prompt, style_enh, restoration_type,
                 neg_prompt, steps, strength, guidance, width, height, seed, randomize],
         outputs=[out_img, used_seed, status, comparison]
     )
@@ -351,7 +338,7 @@ with gr.Blocks(title="OpenVINO Image-to-Image", theme=gr.themes.Soft(), css=cust
         inputs=[restyle_inp, style_type, restyle_prompt],
         outputs=[restyle_out, restyle_status]
     )
-    
+
     gr.Markdown("""
     ---
     **OpenVINO Image-to-Image** | Optimized for CPU Inference | Powered by Stable Diffusion 1.5
