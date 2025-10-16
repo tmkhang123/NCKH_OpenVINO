@@ -1,7 +1,7 @@
 """
 Edge-Guided Generation for OpenVINO CPU
 100% CPU optimized approach using OpenCV + OpenVINO
-Inspired by ControlNet but simplified for Intel hardware
+Simplified edge-based guidance for Intel hardware
 """
 
 import numpy as np
@@ -178,12 +178,17 @@ class EdgeGuidedGenerator:
 
 # Global instance (singleton pattern)
 _generator_instance = None
+_current_model_path = None
 
-def get_edge_guided_generator():
+def get_edge_guided_generator(model_path: str = "models/sd15_int8_ov"):
     """Get or create generator instance"""
-    global _generator_instance
-    if _generator_instance is None:
-        _generator_instance = EdgeGuidedGenerator()
+    global _generator_instance, _current_model_path
+
+    # Create new instance if model path changed
+    if _generator_instance is None or _current_model_path != model_path:
+        _generator_instance = EdgeGuidedGenerator(sd_model_path=model_path)
+        _current_model_path = model_path
+
     return _generator_instance
 
 

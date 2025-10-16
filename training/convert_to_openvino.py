@@ -18,9 +18,11 @@ def export_text_encoder(
 ) -> None:
     """Export CLIP text encoder to OpenVINO format"""
     
-    print("🔄 Converting Text Encoder...")
+    print("Converting Text Encoder...")
     
     text_encoder.eval()
+    # Convert to float32 for ONNX export
+    text_encoder = text_encoder.float()
     
     # Create dummy input
     dummy_input = torch.ones(input_shape, dtype=torch.long)
@@ -59,7 +61,7 @@ def export_text_encoder(
         with open(output_path / "config.json", 'w') as f:
             json.dump(config, f, indent=2)
     
-    print(f"✅ Text Encoder saved to {output_path}")
+    print(f"Text Encoder saved to {output_path}")
 
 def export_unet(
     unet: UNet2DConditionModel,
@@ -69,14 +71,16 @@ def export_unet(
 ) -> None:
     """Export UNet to OpenVINO format"""
     
-    print("🔄 Converting UNet...")
+    print("Converting UNet...")
     
     unet.eval()
+    # Convert to float32 for ONNX export
+    unet = unet.float()
     
-    # Create dummy inputs
-    sample = torch.randn(input_shape)
+    # Create dummy inputs with consistent dtype
+    sample = torch.randn(input_shape, dtype=torch.float32)
     timestep = torch.tensor([1], dtype=torch.long)
-    encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
+    encoder_hidden_states = torch.randn(encoder_hidden_states_shape, dtype=torch.float32)
     
     # Export to ONNX first
     with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tmp_file:
@@ -98,16 +102,9 @@ def export_unet(
         # Convert ONNX to OpenVINO
         ov_model = ov.convert_model(tmp_file.name)
         
-        # Optimize model
-        core = ov.Core()
-        
-        # Apply optimizations
-        pass_config = {"FORCE_FP32_OUTPUT_NAMES": "noise_pred"}
-        ov_model = core.compile_model(ov_model, device_name="CPU", config=pass_config)
-        
         # Save OpenVINO model
         output_path.mkdir(parents=True, exist_ok=True)
-        ov.save_model(ov_model.model, output_path / "openvino_model.xml")
+        ov.save_model(ov_model, output_path / "openvino_model.xml")
         
         # Save config
         config = unet.config
@@ -119,17 +116,19 @@ def export_unet(
         with open(output_path / "config.json", 'w') as f:
             json.dump(config_dict, f, indent=2)
     
-    print(f"✅ UNet saved to {output_path}")
+    print(f"UNet saved to {output_path}")
 
 def export_vae_encoder(vae, output_path: Path) -> None:
     """Export VAE encoder to OpenVINO format"""
     
-    print("🔄 Converting VAE Encoder...")
+    print("Converting VAE Encoder...")
     
     vae.encoder.eval()
+    # Convert to float32 for ONNX export
+    vae.encoder = vae.encoder.float()
     
     # Create dummy input (RGB image)
-    dummy_input = torch.randn(1, 3, 512, 512)
+    dummy_input = torch.randn(1, 3, 512, 512, dtype=torch.float32)
     
     # Create a wrapper for VAE encoder
     class VAEEncoderWrapper(torch.nn.Module):
@@ -176,17 +175,20 @@ def export_vae_encoder(vae, output_path: Path) -> None:
         with open(output_path / "config.json", 'w') as f:
             json.dump(config, f, indent=2)
     
-    print(f"✅ VAE Encoder saved to {output_path}")
+    print(f"VAE Encoder saved to {output_path}")
 
 def export_vae_decoder(vae, output_path: Path) -> None:
     """Export VAE decoder to OpenVINO format"""
     
-    print("🔄 Converting VAE Decoder...")
+    print("Converting VAE Decoder...")
     
     vae.decoder.eval()
+    # Convert to float32 for ONNX export
+    vae.decoder = vae.decoder.float()
+    vae.post_quant_conv = vae.post_quant_conv.float()
     
     # Create dummy input (latent)
-    dummy_input = torch.randn(1, 4, 64, 64)
+    dummy_input = torch.randn(1, 4, 64, 64, dtype=torch.float32)
     
     class VAEDecoderWrapper(torch.nn.Module):
         def __init__(self, decoder, post_quant_conv):
@@ -234,12 +236,12 @@ def export_vae_decoder(vae, output_path: Path) -> None:
         with open(output_path / "config.json", 'w') as f:
             json.dump(config, f, indent=2)
     
-    print(f"✅ VAE Decoder saved to {output_path}")
+    print(f"VAE Decoder saved to {output_path}")
 
 def copy_additional_files(source_path: Path, output_path: Path) -> None:
     """Copy tokenizer, scheduler và các files cần thiết khác"""
     
-    print("📁 Copying additional files...")
+    print("Copying additional files...")
     
     # Files to copy
     files_to_copy = [
@@ -259,23 +261,24 @@ def copy_additional_files(source_path: Path, output_path: Path) -> None:
         if src.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
-            print(f"  ✅ Copied {file_path}")
+            print(f"  Copied {file_path}")
         else:
-            print(f"  ⚠️  {file_path} not found, skipping...")
+            print(f"  {file_path} not found, skipping...")
 
 def main():
     parser = argparse.ArgumentParser(description="Convert Stable Diffusion model to OpenVINO")
     parser.add_argument("--model_path", type=str, required=True, help="Path to trained model hoặc HuggingFace model name")
     parser.add_argument("--lora_path", type=str, default=None, help="Path to LoRA weights (optional)")
+    parser.add_argument("--lora_scale", type=float, default=1.0, help="LoRA scale when fusing (default: 1.0)")
     parser.add_argument("--output_path", type=str, required=True, help="Output directory for OpenVINO model")
     parser.add_argument("--fp16", action="store_true", help="Convert to FP16 (smaller model)")
     parser.add_argument("--int8", action="store_true", help="Apply INT8 quantization")
     
     args = parser.parse_args()
     
-    print("🚀 Starting conversion to OpenVINO...")
-    print(f"📁 Model: {args.model_path}")
-    print(f"📁 Output: {args.output_path}")
+    print("Starting conversion to OpenVINO...")
+    print(f"Model: {args.model_path}")
+    print(f"Output: {args.output_path}")
     
     # Load model
     if Path(args.model_path).exists():
@@ -295,10 +298,38 @@ def main():
             requires_safety_checker=False
         )
     
-    # Load LoRA if provided
+    # Load LoRA if provided (supports Diffusers folder or A1111 .safetensors file)
     if args.lora_path:
-        print(f"🔧 Loading LoRA weights from {args.lora_path}")
-        pipe.unet.load_attn_procs(args.lora_path)
+        lora_path_obj = Path(args.lora_path)
+        if lora_path_obj.exists() and lora_path_obj.is_file() and lora_path_obj.suffix.lower() == ".safetensors":
+            print(f"Loading LoRA file: {args.lora_path}")
+            # Single .safetensors file - load with folder + filename
+            try:
+                pipe.load_lora_weights(
+                    str(lora_path_obj.parent),  # folder path
+                    weight_name=lora_path_obj.name  # filename
+                )
+                print(f"  ✓ LoRA weights loaded successfully")
+            except Exception as e:
+                raise RuntimeError(f"Failed to load LoRA file: {args.lora_path}. Error: {e}")
+        elif lora_path_obj.exists() and lora_path_obj.is_dir():
+            print(f"Loading Diffusers LoRA from: {args.lora_path}")
+            try:
+                pipe.unet.load_attn_procs(args.lora_path)
+            except Exception as e:
+                raise RuntimeError(f"Failed to load Diffusers LoRA from: {args.lora_path}. Error: {e}")
+        else:
+            raise RuntimeError(f"LoRA path does not exist or is not a valid file/folder: {args.lora_path}")
+
+        # Fuse LoRA weights into UNet so exported model includes them
+        if hasattr(pipe, "fuse_lora"):
+            try:
+                print(f"Fusing LoRA into UNet with scale={args.lora_scale}")
+                pipe.fuse_lora(lora_scale=float(args.lora_scale))
+            except Exception as e:
+                raise RuntimeError(f"Failed to fuse LoRA with scale {args.lora_scale}: {e}")
+        else:
+            print("Pipeline does not support fuse_lora(), exported model may not include LoRA weights.")
     
     output_path = Path(args.output_path)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -332,10 +363,10 @@ def main():
     with open(output_path / "model_index.json", 'w') as f:
         json.dump(model_index, f, indent=2)
     
-    print(f"✅ Conversion completed! Model saved to {output_path}")
+    print(f"Conversion completed! Model saved to {output_path}")
     
     # List output files
-    print("\n📋 Generated files:")
+    print("\nGenerated files:")
     for file_path in sorted(output_path.rglob("*")):
         if file_path.is_file():
             print(f"  {file_path.relative_to(output_path)}")

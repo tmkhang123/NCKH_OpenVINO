@@ -34,6 +34,5 @@ tqdm>=4.65.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
 
-# ControlNet dependencies
-mediapipe>=0.10.0  # For pose detection
-controlnet-aux>=0.0.6  # Control preprocessors (optional)
+# Optional dependencies
+mediapipe>=0.10.0  # For pose detection (optional)
