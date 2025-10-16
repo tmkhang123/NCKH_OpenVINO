@@ -1,0 +1,35 @@
+# Models (large files - don't push)
+models/vietnamese_ov/
+models/custom_trained_ov/
+models/lora/
+models/merged/
+models/merged_all_loras/
+models/dynamicrafter_ov/
+checkpoints/
+datasets/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Output files
+output/
+*.mp4
+*.gif
+*.avi
+
+# DynamiCrafter repo (cloned, don't push)
+DynamiCrafter/
+
+# Temporary files
+*.tmp
+.ipynb_checkpoints/
+nul
+
+# PDF files
+*.pdf
+
+# Keep models/sd15_int8_ov (base model structure)
+!models/sd15_int8_ov/
